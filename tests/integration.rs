@@ -32,22 +32,28 @@ struct TestDataInner {
 }
 
 #[derive(Default, Clone)]
-struct TestData(Arc<TestDataInner>);
+struct TestData {
+    inner: Arc<TestDataInner>,
+    primary_follows_focus: bool,
+}
 
 impl TestData {
-    fn new(server: UnixStream, quit_rx: UnixStream) -> Self {
-        Self(Arc::new(TestDataInner {
-            server: Mutex::new(server.into()),
-            quit_rx: Mutex::new(Some(quit_rx)),
-            ..Default::default()
-        }))
+    fn new(server: UnixStream, quit_rx: UnixStream, primary_follows_focus: bool) -> Self {
+        TestData {
+            inner: Arc::new(TestDataInner {
+                server: Mutex::new(server.into()),
+                quit_rx: Mutex::new(Some(quit_rx)),
+                ..Default::default()
+            }),
+            primary_follows_focus,
+        }
     }
 }
 
 impl std::ops::Deref for TestData {
     type Target = Arc<TestDataInner>;
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.inner
     }
 }
 
@@ -75,6 +81,10 @@ impl xwls::RunData for TestData {
 
     fn listenfds(&mut self) -> Vec<OwnedFd> {
         Vec::new()
+    }
+
+    fn primary_follows_focus(&self) -> bool {
+        self.primary_follows_focus
     }
 
     fn server(&self) -> Option<UnixStream> {
@@ -123,7 +133,7 @@ impl Drop for Fixture {
 }
 
 impl Fixture {
-    fn new_preset(pre_connect: impl FnOnce(&mut testwl::Server)) -> Self {
+    fn new_preset(pre_connect: impl FnOnce(&mut testwl::Server), primary_follows_focus: bool) -> Self {
         static INIT: Once = Once::new();
         INIT.call_once(|| {
             pretty_env_logger::formatted_timed_builder()
@@ -139,7 +149,7 @@ impl Fixture {
         let mut testwl = testwl::Server::new(false);
         pre_connect(&mut testwl);
         testwl.connect(a);
-        let our_data = TestData::new(b, quit_rx);
+        let our_data = TestData::new(b, quit_rx, primary_follows_focus);
         let data = our_data.clone();
         let thread = std::thread::spawn(move || xwls::main(data));
 
@@ -197,7 +207,7 @@ impl Fixture {
         }
     }
     fn new() -> Self {
-        Self::new_preset(|_| {})
+        Self::new_preset(|_| {}, false)
     }
 
     #[track_caller]
@@ -1499,12 +1509,11 @@ fn close_window() {
 }
 
 // TODO: figure out if the sleeps in this test can be dealt with...
-#[test]
-fn primary_output() {
+fn primary_output(primary_follows_focus: bool) {
     let mut f = Fixture::new_preset(|testwl| {
         testwl.new_output(0, 0); // WL-1
         testwl.new_output(500, 500); // WL-2
-    });
+    }, primary_follows_focus);
     let mut conn = Connection::new(&f.display);
 
     let reply = conn.get_reply(&xcb::randr::GetScreenResources { window: conn.root });
@@ -1539,12 +1548,12 @@ fn primary_output() {
     f.testwl.focus_toplevel(surface1);
     std::thread::sleep(std::time::Duration::from_millis(10));
     let reply = conn.get_reply(&xcb::randr::GetOutputPrimary { window: conn.root });
-    assert_eq!(reply.output(), output1);
+    assert_eq!(reply.output(), if primary_follows_focus { output1 } else { Xid::none() });
 
     f.testwl.focus_toplevel(surface2);
     std::thread::sleep(std::time::Duration::from_millis(10));
     let reply = conn.get_reply(&xcb::randr::GetOutputPrimary { window: conn.root });
-    assert_eq!(reply.output(), output2);
+    assert_eq!(reply.output(), if primary_follows_focus { output2 } else { Xid::none() });
 
     let wl_output3 = f.create_output(24, 46);
     f.testwl.move_surface_to_output(surface2, &wl_output3);
@@ -1559,7 +1568,17 @@ fn primary_output() {
         .find(|o| ![output1, output2].contains(o))
         .unwrap();
     let reply = conn.get_reply(&xcb::randr::GetOutputPrimary { window: conn.root });
-    assert_eq!(reply.output(), output3);
+    assert_eq!(reply.output(), if primary_follows_focus { output3 } else { Xid::none() });
+}
+
+#[test]
+fn primary_output_doesnt_follow_focus() {
+    primary_output(false)
+}
+
+#[test]
+fn primary_output_follows_focus() {
+    primary_output(true)
 }
 
 #[test]
@@ -2201,7 +2220,7 @@ fn popup_heuristics() {
 fn xsettings_scale() {
     let mut f = Fixture::new_preset(|testwl| {
         testwl.new_output(0, 0); // WL-1
-    });
+    }, false);
     let connection = Connection::new(&f.display);
     f.testwl.enable_xdg_output_manager();
 
@@ -2250,7 +2269,7 @@ fn xsettings_fractional_scale() {
     let mut f = Fixture::new_preset(|testwl| {
         testwl.new_output(0, 0); // WL-1
         testwl.enable_fractional_scale();
-    });
+    }, false);
     let mut connection = Connection::new(&f.display);
     f.testwl.enable_xdg_output_manager();
 
@@ -2386,7 +2405,7 @@ fn rotated_output() {
     let mut f = Fixture::new_preset(|testwl| {
         testwl.enable_xdg_output_manager();
         testwl.new_output(0, 0);
-    });
+    }, false);
     let mut connection = Connection::new(&f.display);
 
     connection

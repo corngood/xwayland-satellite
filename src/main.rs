@@ -13,6 +13,7 @@ struct RealData {
     display: Option<String>,
     listenfds: Vec<OwnedFd>,
     flags: Vec<String>,
+    primary_follows_focus: bool,
 }
 impl xwayland_satellite::RunData for RealData {
     fn display(&self) -> Option<&str> {
@@ -26,6 +27,8 @@ impl xwayland_satellite::RunData for RealData {
     fn flags(&self) -> &[String] {
         &self.flags
     }
+
+    fn primary_follows_focus(&self) -> bool { self.primary_follows_focus }
 }
 
 struct ParsedFlags {
@@ -225,6 +228,7 @@ fn parse_args() -> RealData {
                 data.listenfds.push(fd);
             }
             "--test-listenfd-support" => std::process::exit(0),
+            "--primary-follows-focus" => data.primary_follows_focus = true,
             "-verbose" => {
                 if let Some(v) = args.peek().and_then(|n| n.parse::<u32>().ok()) {
                     flags.verbosity = v;

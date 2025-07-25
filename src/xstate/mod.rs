@@ -257,8 +257,9 @@ impl XState {
     pub fn server_state_setup(
         &self,
         server_state: super::EarlyServerState,
+        primary_follows_focus: bool,
     ) -> super::RealServerState {
-        let mut c = RealConnection::new(self.connection.clone(), self.atoms.clone());
+        let mut c = RealConnection::new(self.connection.clone(), self.atoms.clone(), primary_follows_focus);
         c.update_outputs(self.root);
         server_state.upgrade_connection(c)
     }
@@ -1279,15 +1280,17 @@ pub struct RealConnection {
     connection: Rc<xcb::Connection>,
     outputs: HashMap<String, xcb::randr::Output>,
     primary_output: xcb::randr::Output,
+    primary_follows_focus: bool,
 }
 
 impl RealConnection {
-    fn new(connection: Rc<xcb::Connection>, atoms: Atoms) -> Self {
+    fn new(connection: Rc<xcb::Connection>, atoms: Atoms, primary_follows_focus: bool) -> Self {
         Self {
             atoms,
             connection,
             outputs: Default::default(),
             primary_output: Xid::none(),
+            primary_follows_focus,
         }
     }
 
@@ -1409,33 +1412,35 @@ impl XConnection for RealConnection {
             debug!("ChangeProperty failed ({window:?}: {e:?})");
         }
 
-        if let Some(name) = output_name {
-            let Some(output) = self.outputs.get(&name).copied() else {
-                warn!("Couldn't find output {name}, primary output will be wrong");
-                return;
-            };
-            if output == self.primary_output {
-                debug!("primary output is already {name}");
-                return;
-            }
+        if self.primary_follows_focus {
+            if let Some(name) = output_name {
+                let Some(output) = self.outputs.get(&name).copied() else {
+                    warn!("Couldn't find output {name}, primary output will be wrong");
+                    return;
+                };
+                if output == self.primary_output {
+                    debug!("primary output is already {name}");
+                    return;
+                }
 
-            if let Err(e) = self
-                .connection
-                .send_and_check_request(&xcb::randr::SetOutputPrimary { window, output })
-            {
-                warn!("Couldn't set output {name} as primary: {e:?}");
+                if let Err(e) = self
+                    .connection
+                    .send_and_check_request(&xcb::randr::SetOutputPrimary { window, output })
+                {
+                    warn!("Couldn't set output {name} as primary: {e:?}");
+                } else {
+                    debug!("set {name} as primary output");
+                    self.primary_output = output;
+                }
             } else {
-                debug!("set {name} as primary output");
-                self.primary_output = output;
+                let _ = self
+                    .connection
+                    .send_and_check_request(&xcb::randr::SetOutputPrimary {
+                        window,
+                        output: Xid::none(),
+                    });
+                self.primary_output = Xid::none();
             }
-        } else {
-            let _ = self
-                .connection
-                .send_and_check_request(&xcb::randr::SetOutputPrimary {
-                    window,
-                    output: Xid::none(),
-                });
-            self.primary_output = Xid::none();
         }
     }
 

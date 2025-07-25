@@ -39,6 +39,7 @@ pub trait RunData {
     fn flags(&self) -> &[String] {
         &[]
     }
+    fn primary_follows_focus(&self) -> bool;
     fn server(&self) -> Option<UnixStream> {
         None
     }
@@ -210,7 +211,7 @@ pub fn main(mut data: impl RunData) -> Option<()> {
         info!("Connected to Xwayland on {display}");
         data.xwayland_ready(display, xwl_pid);
     }
-    let mut server_state = xstate.server_state_setup(server_state);
+    let mut server_state = xstate.server_state_setup(server_state, data.primary_follows_focus());
 
     #[cfg(feature = "systemd")]
     {
